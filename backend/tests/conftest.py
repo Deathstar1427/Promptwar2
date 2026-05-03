@@ -1,22 +1,50 @@
-"""
-Pytest configuration and fixtures for backend tests.
-
-This module provides shared fixtures for FastAPI testing,
-including an async client for making test requests to the API.
-"""
+"""Pytest configuration and fixtures for Election Assistant backend tests."""
 
 import pytest
-from httpx import AsyncClient
-from main import app
+from unittest.mock import Mock, patch, MagicMock
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-async def client():
-    """
-    Fixture providing an async HTTP client for testing the FastAPI app.
+def mock_gemini_response():
+    """Mock response from Gemini API."""
+    mock_response = MagicMock()
+    mock_response.text = "This is a test response from Gemini"
+    return mock_response
 
-    Returns:
-        AsyncClient: An async HTTP client configured for the test app.
-    """
-    async with AsyncClient(app=app, base_url="http://test") as async_client:
-        yield async_client
+
+@pytest.fixture
+def mock_genai_model():
+    """Mock Google GenerativeModel."""
+    with patch('google.generativeai.GenerativeModel') as mock_model:
+        mock_instance = MagicMock()
+        mock_model.return_value = mock_instance
+        mock_instance.generate_content = MagicMock()
+        mock_instance.start_chat = MagicMock()
+        yield mock_instance
+
+
+@pytest.fixture
+def client():
+    """Create FastAPI test client."""
+    from main import app
+    return TestClient(app)
+
+
+@pytest.fixture
+def sample_chat_request():
+    """Sample valid chat request payload."""
+    return {
+        "message": "How do I register to vote?",
+        "history": [],
+        "context": "general"
+    }
+
+
+@pytest.fixture
+def sample_history():
+    """Sample conversation history."""
+    return [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi! How can I help?"}
+    ]
