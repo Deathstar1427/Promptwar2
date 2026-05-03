@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.*.local
+.firebaserc
 
 # Dependencies
 node_modules/
