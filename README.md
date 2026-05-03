@@ -14,6 +14,14 @@ An AI-powered election guide for Indian elections. Built for PromptWars Challeng
 - **Backend**: FastAPI + Gemini 1.5 Flash
 - **Deployment**: Firebase Hosting (Frontend) & Google Cloud Run (Backend)
 
+## Google Services Used
+- ✅ **Google Gemini 1.5 Flash API** - AI engine for election guidance chatbot
+- ✅ **Google Cloud Run** - Serverless backend deployment
+- ✅ **Firebase Hosting** - Frontend deployment and CDN
+- ✅ **Google Cloud Secret Manager** - Secure API key management
+- ✅ **Google Cloud Logging** - Structured logging and monitoring
+- ✅ **Firebase Analytics** - User engagement tracking (optional)
+
 ## Security Features
 - ✅ **CORS Protection**: Restricted to Firebase domain only
 - ✅ **API Key Security**: Uses Cloud Run Secrets (not in code)

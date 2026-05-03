@@ -1,180 +1,410 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Send, Sparkles, User, Bot, RefreshCw, Info, Vote } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
-import QuickStarters from './components/QuickStarters';
-import MessageBubble from './components/MessageBubble';
-import TypingIndicator from './components/TypingIndicator';
+/**
+ * App Component - Jan Shakti Election Assistant
+ * 
+ * Exact match to the HTML greeting and chat screens
+ */
+
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import ErrorBoundary from './components/ErrorBoundary';
+import GreetingScreen from './screens/GreetingScreen';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+const JAN_SHAKTI_LOGO = "https://lh3.googleusercontent.com/aida-public/AB6AXuCAWUkhlcp1ppV3tkKz-czAq2JjB6jeNrIhC-h8DlW2Scjj-o6qEUuSWQPY_EmMD8cM8FL60bQNQ7RM6mhgKUweHVh8QS_wSLy47_F-C0Fn_AOVxm5DG2nCWanH72OAriXEhNCK6Aq2jFlqAspds88V2gEJzZN3gYXDNczxrtfEj9RVwAiBfqnCL-eZzFSxOfWhPuQhhmXg0oaE12jrqwFtACH1Xk0J-jx9kLsfEjMok03l8a3vRgjF8lC3LfH9jUk63CPn6in-VrIf";
 
 function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [context, setContext] = useState('general');
   const [isStarted, setIsStarted] = useState(false);
-  const messagesEndRef = useRef(null);
+  const [error, setError] = useState(null);
+  const [showAccessibility, setShowAccessibility] = useState(false);
+  const [textSize, setTextSize] = useState('standard');
+  const [language, setLanguage] = useState('english');
 
-  const scrollToBottom = () => {
+  const messagesEndRef = useRef(null);
+  const timeoutRef = useRef(null);
+  const abortControllerRef = useRef(null);
+
+  const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  }, []);
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, loading]);
+  }, [messages, loading, scrollToBottom]);
 
-  const handleSend = async (text, customContext) => {
-    const messageText = text || input;
-    if (!messageText.trim()) return;
+  const getErrorMessage = useCallback((error, statusCode) => {
+    if (statusCode === 429) {
+      return "Too many requests. Please wait a moment before sending another message.";
+    }
+    if (statusCode === 503) {
+      return "The service is temporarily unavailable. Please try again in a moment.";
+    }
+    if (error?.message === 'Failed to fetch' || !navigator.onLine) {
+      return "Please check your internet connection and try again.";
+    }
+    return "I'm having trouble connecting. Please try again later.";
+  }, []);
 
-    if (!isStarted) setIsStarted(true);
+  const handleSend = useCallback(async (messageText) => {
+    const finalMessage = messageText || input;
+    
+    if (!finalMessage.trim()) {
+      return;
+    }
 
-    const userMessage = { role: 'user', content: messageText };
+    if (!isStarted) {
+      setIsStarted(true);
+    }
+
+    const userMessage = { role: 'user', content: finalMessage };
     const nextHistory = [...messages, userMessage];
     setMessages(nextHistory);
     setInput('');
     setLoading(true);
+    setError(null);
 
-    const currentContext = customContext || context;
-    if (customContext) setContext(customContext);
+    abortControllerRef.current = new AbortController();
+
+    const timeoutHandle = setTimeout(() => {
+      abortControllerRef.current?.abort();
+      setLoading(false);
+    }, 15000);
+    timeoutRef.current = timeoutHandle;
 
     try {
       const response = await fetch(`${API_URL}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: messageText,
+          message: finalMessage,
           history: nextHistory,
-          context: currentContext
+          language: language
         }),
+        signal: abortControllerRef.current.signal
       });
 
-      if (!response.ok) throw new Error('API error');
-      
+      clearTimeout(timeoutHandle);
+
+      if (!response.ok) {
+        const errorMessage = getErrorMessage(null, response.status);
+        setMessages((prev) => [...prev, { role: 'assistant', content: errorMessage }]);
+        setError(errorMessage);
+        return;
+      }
+
       const data = await response.json();
       setMessages((prev) => [...prev, { role: 'assistant', content: data.reply }]);
-    } catch (error) {
-      console.error(error);
-      setMessages((prev) => [...prev, { 
-        role: 'assistant', 
-        content: "Sorry, I'm having trouble connecting to my brain right now. Please try again later." 
-      }]);
+    } catch (err) {
+      clearTimeout(timeoutHandle);
+
+      if (err.name === 'AbortError') {
+        const errorMessage = "Request timed out. Please try again with a shorter message.";
+        setMessages((prev) => [...prev, { role: 'assistant', content: errorMessage }]);
+        setError(errorMessage);
+      } else {
+        const errorMessage = getErrorMessage(err);
+        setMessages((prev) => [...prev, { role: 'assistant', content: errorMessage }]);
+        setError(errorMessage);
+      }
     } finally {
       setLoading(false);
     }
-  };
+  }, [input, isStarted, messages, language, getErrorMessage]);
 
-  const handleRestart = () => {
+  const handleRestart = useCallback(() => {
     setMessages([]);
     setIsStarted(false);
-    setContext('general');
+    setInput('');
+    setError(null);
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    if (abortControllerRef.current) abortControllerRef.current.abort();
+  }, []);
+
+  const handleInputChange = useCallback((e) => {
+    setInput(e.target.value);
+  }, []);
+
+  const handleSubmit = useCallback((e) => {
+    e.preventDefault();
+    handleSend();
+  }, [handleSend]);
+
+  const handleKeyDown = useCallback((e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      handleSend();
+    }
+  }, [handleSend]);
+
+  // Helper function to format message content
+  const formatMessage = (content) => {
+    if (!content) return null;
+    const paragraphs = content.split('\n\n').filter(p => p.trim());
+    return paragraphs.map((para, i) => {
+      if (para.match(/^\d+[\.\)]\s*/)) {
+        return (
+          <ol key={i} className="list-decimal list-inside space-y-1 ml-2">
+            {para.split('\n').filter(l => l.trim()).map((line, j) => (
+              <li key={j}>{line.replace(/^\d+[\.\)]\s*/, '')}</li>
+            ))}
+          </ol>
+        );
+      }
+      if (para.match(/^[-•*]\s*/)) {
+        return (
+          <ul key={i} className="list-disc list-inside space-y-1 ml-2">
+            {para.split('\n').filter(l => l.trim()).map((line, j) => (
+              <li key={j}>{line.replace(/^[-•*]\s*/, '')}</li>
+            ))}
+          </ul>
+        );
+      }
+      return <p key={i} className="mb-2">{para}</p>;
+    });
   };
 
   return (
-    <div className="flex flex-col min-h-screen w-full bg-[#0f172a] text-white font-sans selection:bg-blue-500/30">
-      {/* Header */}
-      <header className="sticky top-0 z-50 glass-dark border-b border-white/5 py-4 px-6 flex items-center justify-between">
-        <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20">
-            <Vote size={24} className="text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight">Election <span className="gradient-text">Assistant</span></h1>
-            <div className="flex items-center space-x-1.5">
-              <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
-              <span className="text-[10px] text-gray-400 uppercase tracking-widest font-semibold">Gemini 1.5 Flash Powered</span>
+    <ErrorBoundary>
+      <div className="flex flex-col h-screen w-full bg-[#FEFCE8] text-[#131b2e] overflow-hidden font-sans">
+        
+        {/* Header - Only show when chat started */}
+        {isStarted && (
+          <header className="flex justify-between items-center w-full px-6 py-4 bg-white border-b-4 border-cyan-800/10 shadow-sm z-50">
+            <div className="flex items-center gap-4">
+              <span className="text-2xl font-black text-cyan-700 font-serif">Jan-Shakti Election Assistant</span>
+            </div>
+            <div className="flex gap-4 items-center">
+              <button 
+                onClick={handleRestart}
+                className="font-serif font-bold text-lg text-cyan-700 hover:bg-cyan-50 px-4 py-2 rounded-full border-b-4 border-cyan-800 active:translate-y-0.5 active:border-b-2 transition-all"
+              >
+                New Chat
+              </button>
+              <button 
+                onClick={() => setShowAccessibility(true)}
+                className="font-serif font-bold text-lg text-slate-600 hover:bg-cyan-50 px-4 py-2 rounded-full"
+              >
+                Accessibility
+              </button>
+              <div className="flex gap-2">
+                <span className="material-symbols-outlined text-slate-600 hover:text-cyan-700 cursor-pointer p-2 rounded-full hover:bg-slate-100">verified_user</span>
+                <span className="material-symbols-outlined text-slate-600 hover:text-cyan-700 cursor-pointer p-2 rounded-full hover:bg-slate-100">g_translate</span>
+                <span className="material-symbols-outlined text-slate-600 hover:text-cyan-700 cursor-pointer p-2 rounded-full hover:bg-slate-100">info</span>
+              </div>
+            </div>
+          </header>
+        )}
+
+        {/* Main Content Area */}
+        <main className="flex-1 flex overflow-hidden">
+          
+          {/* Greeting Screen - When not started */}
+          {!isStarted && (
+            <GreetingScreen onSelect={handleSend} />
+          )}
+
+          {/* Chat Screen - When started */}
+          {isStarted && (
+            <div className="flex-1 flex flex-col h-full">
+              {/* Messages Container */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-6 pb-40">
+                {/* Date Header */}
+                {messages.length === 0 && (
+                  <div className="flex justify-center my-4">
+                    <span className="bg-slate-200 text-slate-600 text-xs px-4 py-1 rounded-full">Today</span>
+                  </div>
+                )}
+
+                {/* Messages */}
+                {messages.map((message, index) => (
+                  <div key={index}>
+                    {message.role === 'user' ? (
+                      // User Message - Teal with white text
+                      <div className="flex items-end justify-end gap-4 max-w-3xl ml-auto">
+                        <div className="bg-[#005a71] text-white p-5 rounded-[24px] rounded-br-[4px] shadow-sm">
+                          {message.content}
+                        </div>
+                      </div>
+                    ) : (
+                      // AI Message - White with dark text
+                      <div className="flex items-start gap-4 max-w-3xl">
+                        <img
+                          src={JAN_SHAKTI_LOGO}
+                          alt="AI Avatar"
+                          className="w-10 h-10 rounded-full mt-2 shadow-sm border border-slate-300"
+                        />
+                        <div className="bg-white text-[#131b2e] p-5 rounded-[24px] rounded-bl-[4px] border border-slate-200/30 shadow-sm space-y-4">
+                          {formatMessage(message.content)}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {/* Typing Indicator */}
+                {loading && (
+                  <div className="flex items-start gap-4 max-w-3xl">
+                    <img
+                      src={JAN_SHAKTI_LOGO}
+                      alt="AI Avatar"
+                      className="w-10 h-10 rounded-full mt-2 shadow-sm border border-slate-300"
+                    />
+                    <div className="bg-white p-5 rounded-[24px] rounded-bl-[4px] border border-slate-200/30 shadow-sm flex items-center gap-1 w-20 h-[68px]">
+                      <div className="w-2.5 h-2.5 bg-cyan-600 rounded-full typing-dot"></div>
+                      <div className="w-2.5 h-2.5 bg-cyan-600 rounded-full typing-dot"></div>
+                      <div className="w-2.5 h-2.5 bg-cyan-600 rounded-full typing-dot"></div>
+                    </div>
+                  </div>
+                )}
+
+                <div ref={messagesEndRef} />
+              </div>
+            </div>
+          )}
+        </main>
+
+        {/* Fixed Input Area - Bottom */}
+        <div className="fixed bottom-0 left-0 w-full p-5 flex justify-center bg-gradient-to-t from-[#FEFCE8] via-[#FEFCE8] to-transparent z-20 pb-5">
+          <div className="w-full max-w-[800px] relative">
+            {/* Quick Replies - Only show when chat started */}
+            {isStarted && (
+              <div className="flex gap-3 mb-4 overflow-x-auto pb-2 px-1">
+                <button 
+                  onClick={() => handleSend('Find my polling booth')}
+                  className="whitespace-nowrap bg-[#E1F5FE] text-[#0e7490] font-bold px-5 py-2.5 rounded-full border-b-2 border-[#0A5A70]/20 hover:bg-[#B3E5FC] active:translate-y-0.5 active:border-b-0 transition-all"
+                >
+                  Find Polling Booth
+                </button>
+                <button 
+                  onClick={() => handleSend('Check my registration')}
+                  className="whitespace-nowrap bg-[#E1F5FE] text-[#0e7490] font-bold px-5 py-2.5 rounded-full border-b-2 border-[#0A5A70]/20 hover:bg-[#B3E5FC] active:translate-y-0.5 active:border-b-0 transition-all"
+                >
+                  Check Registration
+                </button>
+                <button 
+                  onClick={() => handleSend('What are the election dates')}
+                  className="whitespace-nowrap bg-[#E1F5FE] text-[#0e7490] font-bold px-5 py-2.5 rounded-full border-b-2 border-[#0A5A70]/20 hover:bg-[#B3E5FC] active:translate-y-0.5 active:border-b-0 transition-all"
+                >
+                  Election Dates
+                </button>
+              </div>
+            )}
+
+            {/* Input Field */}
+            <div className="bg-white rounded-full shadow-[0px_10px_30px_rgba(234,88,12,0.08)] flex items-center p-2 border border-slate-200/20">
+              <button className="p-3 text-slate-400 hover:text-cyan-700 transition-colors rounded-full hover:bg-slate-50">
+                <span className="material-symbols-outlined">add_circle</span>
+              </button>
+              <input
+                type="text"
+                value={input}
+                onChange={handleInputChange}
+                onKeyDown={handleKeyDown}
+                placeholder="Ask me anything about voting..."
+                className="flex-1 bg-transparent border-none focus:ring-0 text-[#131b2e] px-4 py-3 placeholder:text-slate-400/60 outline-none"
+                disabled={loading}
+              />
+              <button
+                type="submit"
+                onClick={handleSubmit}
+                disabled={loading || !input.trim()}
+                className="p-3 bg-[#bc4200] text-white rounded-full hover:opacity-90 transition-opacity ml-2 w-12 h-12 flex items-center justify-center border-b-4 border-b-[#7f2b00] active:translate-y-0.5 active:border-b-2 disabled:opacity-50"
+              >
+                <span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>send</span>
+              </button>
+            </div>
+
+            {/* Footer Text */}
+            <div className="text-center mt-2">
+              <span className="text-xs text-slate-400/70">Jan-Shakti AI can make mistakes. Check official ECI sources.</span>
             </div>
           </div>
         </div>
-        
-        {isStarted && (
-          <button 
-            onClick={handleRestart}
-            className="p-2 hover:bg-white/5 rounded-lg transition-colors group"
-            title="Restart Session"
-          >
-            <RefreshCw size={20} className="text-gray-400 group-hover:rotate-180 transition-transform duration-500" />
-          </button>
-        )}
-      </header>
 
-      <main className="flex-1 overflow-y-auto w-full max-w-4xl mx-auto px-4 py-8">
-        {!isStarted ? (
-          <div className="flex flex-col items-center justify-center min-h-[70vh] text-center px-4">
-            <motion.div
-              initial={{ scale: 0.8, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ duration: 0.5 }}
-              className="w-20 h-20 bg-blue-500/10 rounded-3xl flex items-center justify-center mb-8 border border-blue-500/20 animate-float"
-            >
-              <Sparkles className="w-10 h-10 text-blue-400" />
-            </motion.div>
-            
-            <motion.h2 
-              initial={{ y: 20, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              transition={{ delay: 0.2 }}
-              className="text-4xl md:text-5xl font-extrabold mb-4"
-            >
-              How can I help you <span className="gradient-text">vote today?</span>
-            </motion.h2>
-            
-            <motion.p 
-              initial={{ y: 20, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              transition={{ delay: 0.3 }}
-              className="text-gray-400 text-lg max-w-xl mb-12"
-            >
-              Your personal guide to the Indian Elections. Ask in English or Hinglish about registration, timelines, and more.
-            </motion.p>
-            
-            <QuickStarters onSelect={handleSend} />
-          </div>
-        ) : (
-          <div className="space-y-6">
-            <AnimatePresence>
-              {messages.map((msg, index) => (
-                <MessageBubble key={index} message={msg} />
-              ))}
-            </AnimatePresence>
-            
-            {loading && <TypingIndicator />}
-            <div ref={messagesEndRef} />
-          </div>
-        )}
-      </main>
+        {/* Accessibility Settings Panel */}
+        {showAccessibility && (
+          <>
+            <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-40" onClick={() => setShowAccessibility(false)} />
+            <aside className="fixed top-0 right-0 h-full w-80 bg-white shadow-[0px_10px_30px_rgba(234,88,12,0.08)] z-50 rounded-l-[24px] flex flex-col border-l border-slate-200/30">
+              <div className="flex justify-between items-center px-6 py-5 border-b border-slate-200/20">
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-2xl text-[#005a71]">settings_accessibility</span>
+                  <h2 className="text-2xl font-serif font-semibold text-[#005a71]">Settings</h2>
+                </div>
+                <button onClick={() => setShowAccessibility(false)} className="p-2 -mr-2 rounded-full hover:bg-slate-50 text-slate-500">
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              </div>
 
-      {/* Input Area */}
-      <footer className="sticky bottom-0 z-50 glass-dark border-t border-white/5 p-4">
-        <div className="max-w-4xl mx-auto">
-          <form 
-            onSubmit={(e) => { e.preventDefault(); handleSend(); }}
-            className="relative flex items-center"
-          >
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={isStarted ? "Ask a follow-up question..." : "Type your question here..."}
-              className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 pl-6 pr-14 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 transition-all text-gray-100 placeholder:text-gray-500 shadow-2xl"
-              disabled={loading}
-            />
-            <button
-              type="submit"
-              disabled={loading || !input.trim()}
-              className="absolute right-2 p-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:opacity-50 rounded-xl transition-all shadow-lg shadow-blue-600/30 text-white"
-            >
-              <Send size={20} />
-            </button>
-          </form>
-          
-          <div className="mt-3 flex items-center justify-center space-x-4 text-[11px] text-gray-500">
-            <span className="flex items-center"><Info size={12} className="mr-1" /> ECI Guidelines 2024-25</span>
-            <span className="flex items-center font-medium text-blue-500/80 uppercase">Hinglish Supported</span>
-          </div>
-        </div>
-      </footer>
-    </div>
+              <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                <section className="space-y-3">
+                  <div className="flex justify-between items-baseline">
+                    <label className="font-bold text-[#131b2e]">Text Size</label>
+                    <span className="text-xs text-[#005a71] px-2 py-1 bg-[#b9eaff] rounded-full">
+                      {textSize.charAt(0).toUpperCase() + textSize.slice(1)}
+                    </span>
+                  </div>
+                  <div className="flex gap-2">
+                    {['small', 'standard', 'large'].map((size) => (
+                      <button
+                        key={size}
+                        onClick={() => setTextSize(size)}
+                        className={`flex-1 py-2 px-3 rounded-full font-bold border-b-2 transition-all ${
+                          textSize === size
+                            ? 'bg-[#005a71] text-white border-b-[#053d4c]'
+                            : 'bg-slate-100 text-slate-600 border-b-slate-300'
+                        }`}
+                      >
+                        {size === 'small' ? 'A' : size === 'standard' ? 'A+' : 'A++'}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <hr className="border-slate-200/20" />
+
+                <section className="space-y-3">
+                  <label className="font-bold text-[#131b2e]">Language</label>
+                  <div className="flex p-1 bg-slate-100 rounded-full border border-slate-200/10">
+                    <button
+                      onClick={() => setLanguage('english')}
+                      className={`flex-1 py-2 text-center rounded-full font-bold transition-all border-b-2 ${
+                        language === 'english'
+                          ? 'bg-white shadow-sm text-[#005a71] border-b-[#005a71]'
+                          : 'text-slate-500 border-b-transparent'
+                      }`}
+                    >
+                      English
+                    </button>
+                    <button
+                      onClick={() => setLanguage('hinglish')}
+                      className={`flex-1 py-2 text-center rounded-full font-bold transition-all border-b-2 ${
+                        language === 'hinglish'
+                          ? 'bg-white shadow-sm text-[#005a71] border-b-[#005a71]'
+                          : 'text-slate-500 border-b-transparent'
+                      }`}
+                    >
+                      Hinglish
+                    </button>
+                  </div>
+                </section>
+              </div>
+
+              <div className="p-6 pt-5 border-t border-slate-200/20 bg-slate-50 rounded-bl-[24px]">
+                <button
+                  onClick={() => setShowAccessibility(false)}
+                  className="w-full py-3 px-6 bg-[#005a71] text-white rounded-full font-bold border-b-4 border-b-[#003d4c] active:translate-y-0.5 active:border-b-2 hover:bg-[#0e7490] transition-all flex items-center justify-center gap-2 shadow-sm"
+                >
+                  <span className="material-symbols-outlined">check_circle</span>
+                  Apply Changes
+                </button>
+                <p className="text-center text-xs text-slate-500 mt-3">Settings apply immediately.</p>
+              </div>
+            </aside>
+          </>
+        )}
+      </div>
+    </ErrorBoundary>
   );
 }
 
