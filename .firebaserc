@@ -1,0 +1,22 @@
+{
+  "projects": {
+    "default": "gen-lang-client-0630987085"
+  },
+  "targets": {
+    "gen-lang-client-0630987085": {
+      "hosting": {
+        "election": [
+          "gen-lang-client-0630987085"
+        ]
+      }
+    },
+    "universe-911": {
+      "hosting": {
+        "election-assistant": [
+          "universe-911"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

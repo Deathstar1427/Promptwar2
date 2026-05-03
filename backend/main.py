@@ -31,15 +31,18 @@ import re
 import json
 import logging
 import time
+import uuid
 from collections import defaultdict
 from functools import lru_cache
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, Field
+from pydantic_settings import BaseSettings
 import google.generativeai as genai
 import google.api_core.exceptions
 
@@ -57,9 +60,35 @@ logger = logging.getLogger(__name__)
 try:
     import google.cloud.logging
     cloud_logging_client = google.cloud.logging.Client()
-    cloud_logging_client.setup_logging()
+    cloud_logging_client.setup_logging(log_level=logging.INFO)
 except (ImportError, Exception):
     pass
+
+
+# ============================================================================
+# ENVIRONMENT CONFIGURATION
+# ============================================================================
+
+class Settings(BaseSettings):
+    """Application settings loaded from environment variables."""
+    
+    gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
+    port: int = Field(default=8080, alias="PORT")
+    host: str = Field(default="0.0.0.0", alias="HOST")
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    cache_ttl: int = Field(default=3600, alias="CACHE_TTL")
+    rate_limit_requests: int = Field(default=10, alias="RATE_LIMIT_REQUESTS")
+    rate_limit_window: int = Field(default=60, alias="RATE_LIMIT_WINDOW")
+    max_message_length: int = Field(default=500, alias="MAX_MESSAGE_LENGTH")
+    max_history_length: int = Field(default=10, alias="MAX_HISTORY_LENGTH")
+    
+    class Config:
+        env_file = ".env"
+        extra = "ignore"
+
+
+# Initialize settings
+settings = Settings()
 
 # ============================================================================
 # GEMINI API CONFIGURATION
@@ -78,8 +107,24 @@ genai.configure(api_key=api_key)
 
 app = FastAPI(
     title="Election Assistant API",
-    description="AI-powered election assistance chatbot for Indian voters",
-    version="2.0.0"
+    description="""AI-powered election assistance chatbot for Indian voters.
+    
+## Features
+- 🤖 Intelligent chat responses using Gemini 2.5 Flash
+- 📋 Voter registration guidance (Form 6)
+- 📍 Polling booth finder
+- 📅 Election information
+- 🗳️ Voting process education
+
+## Rate Limits
+- 10 requests per 60 seconds per IP address
+
+## Security
+All responses include security headers for protection.""",
+    version="2.0.0",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json"
 )
 
 # Add GZip compression
@@ -119,6 +164,10 @@ async def add_security_headers(request: Request, call_next):
         - X-Frame-Options: DENY
         - X-XSS-Protection: 1; mode=block
         - Strict-Transport-Security: max-age=31536000; includeSubDomains
+        - Content-Security-Policy: CSP for XSS prevention
+        - Referrer-Policy: strict-origin-when-cross-origin
+        - Permissions-Policy: geolocation=(), microphone=(), camera=()
+        - X-Request-ID: Unique identifier for request tracing
     
     Args:
         request: The incoming HTTP request
@@ -127,11 +176,32 @@ async def add_security_headers(request: Request, call_next):
     Returns:
         Response with security headers added
     """
+    import uuid
+    request_id = str(uuid.uuid4())
+    
     response = await call_next(request)
+    
+    # Basic security headers
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    
+    # Additional security headers
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self' https://generativelanguage.googleapis.com;"
+    )
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    
+    # Request tracing
+    response.headers["X-Request-ID"] = request_id
+    
     return response
 
 # ============================================================================
